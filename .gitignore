@@ -1,0 +1,32 @@
+
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/build/
+
+# Python cache and virtual environments
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.venv/
+**/venv/
+
+# Uploaded files (keep the placeholder)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Trained models
+ai-service/trained_models/*.pkl
+
+# Environment variables and secrets
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Local tooling
+.pytest_cache/
+.DS_Store
+.vscode/
