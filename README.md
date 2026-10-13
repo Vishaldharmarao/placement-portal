@@ -118,9 +118,7 @@ All API responses use `{ "success": true, "data": ... }`; errors use `{ "success
 - Local FastAPI `/health`, job matching, skill-gap analysis, and prediction responded. A MIME-spoofed corrupt PDF was rejected with HTTP 422.
 - Authenticated student/company/admin end-to-end workflows have not yet been verified. The seed account password is intentionally undocumented; use a fictional local account for manual testing.
 
-## Screenshots
 
-Add project screenshots here after running the frontend.
 
 ## Future improvements
 
