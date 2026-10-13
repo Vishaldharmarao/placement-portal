@@ -1553,17 +1553,24 @@ export function Profile({ notify }) {
 export function Resume({ notify }) {
   const [file, setFile] = useState(null);
   const [resumes, setResumes] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [jobId, setJobId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [deletingAnalysisId, setDeletingAnalysisId] = useState(null);
+  const [error, setError] = useState('');
 
   const refresh = async () => {
     try {
       const response = await api.get('/resumes');
       setResumes(response.data.data || []);
     } catch (error) {
-      console.error(
-        'Resume loading error:',
-        error
-      );
+      setError(error.response?.data?.message || 'Could not load saved resumes.');
+    }
+    try {
+      const response = await api.get('/jobs');
+      setJobs(response.data.data || []);
+    } catch (error) {
+      setError(error.response?.data?.message || 'Could not load jobs for resume matching.');
     }
   };
 
@@ -1628,9 +1635,11 @@ export function Resume({ notify }) {
   const analyze = async (id) => {
     try {
       setLoading(true);
+      setError('');
 
       await api.post(
         `/resumes/${id}/analyze`
+        , { job_id: jobId || null }
       );
 
       notify(
@@ -1639,14 +1648,46 @@ export function Resume({ notify }) {
 
       await refresh();
     } catch (error) {
-      notify(
-        error.response?.data?.message ||
-          'Analysis failed'
-      );
+      const message = error.response?.data?.message || 'Analysis failed';
+      setError(message);
+      notify(message);
     } finally {
       setLoading(false);
     }
   };
+
+  const deleteAnalysis = async (analysisId) => {
+    if (deletingAnalysisId !== null) return;
+    if (!window.confirm('Delete this saved ATS analysis? The uploaded resume file will be kept.')) return;
+
+    setDeletingAnalysisId(analysisId);
+    setError('');
+    try {
+      await api.delete(`/resumes/analysis/${analysisId}`);
+      setResumes((current) => current.map((resume) => (
+        String(resume.analysis_id) === String(analysisId)
+          ? {
+              ...resume,
+              analysis_id: null,
+              ats_score: null,
+              extracted_skills: null,
+              missing_skills: null,
+              recommendations: null,
+              score_breakdown: null,
+            }
+          : resume
+      )));
+      notify('ATS analysis deleted. The uploaded resume was kept.');
+    } catch (deleteError) {
+      const message = deleteError.response?.data?.message || 'Could not delete this ATS analysis.';
+      setError(message);
+      notify(message);
+    } finally {
+      setDeletingAnalysisId(null);
+    }
+  };
+
+  const analysisCount = resumes.filter((resume) => resume.analysis_id != null).length;
 
   return (
     <div className="page">
@@ -1657,6 +1698,14 @@ export function Resume({ notify }) {
       <h2>
         Make every line count.
       </h2>
+
+      <label>
+        Compare against a job (optional)
+        <select value={jobId} onChange={(event) => setJobId(event.target.value)}>
+          <option value="">General resume-quality assessment</option>
+          {jobs.map((job) => <option key={job.id} value={job.id}>{job.title} · {job.company_name}</option>)}
+        </select>
+      </label>
 
       <Card className="upload">
 
@@ -1693,18 +1742,23 @@ export function Resume({ notify }) {
         </button>
       </Card>
 
-      {resumes.map((resume) => {
-        let extractedSkills = [];
+      {error && <p role="alert" className="error">{error}</p>}
 
-        try {
-          extractedSkills =
-            JSON.parse(
-              resume.extracted_skills ||
-                '[]'
-            );
-        } catch {
-          extractedSkills = [];
-        }
+      <h3>Saved ATS analyses ({analysisCount})</h3>
+      {analysisCount === 0 && <p className="empty">No saved ATS analyses yet. Analyze an uploaded resume to create one.</p>}
+
+      {resumes.map((resume) => {
+        const parseJson = (value, fallback) => {
+          if (value && typeof value === 'object') return value;
+          try { return JSON.parse(value || ''); } catch { return fallback; }
+        };
+        const extractedSkills = parseJson(resume.extracted_skills, []);
+        const missingSkills = parseJson(resume.missing_skills, []);
+        const recommendations = parseJson(resume.recommendations, []);
+        const breakdown = parseJson(resume.score_breakdown, {});
+        const components = breakdown.components || {};
+        const matchedSkills = breakdown.matched_skills || [];
+        const hasCurrentScore = Object.keys(components).length > 0;
 
         return (
           <Card
@@ -1718,13 +1772,23 @@ export function Resume({ notify }) {
               </p>
 
               <h3>
-                {resume.ats_score ?? '—'}
+                {hasCurrentScore ? resume.ats_score : '—'}
                 <small>
-                  {' '}
-                  ATS score
+                  {' '}{hasCurrentScore ? 'ATS score' : 'score unavailable'}
                 </small>
               </h3>
 
+              <p>{breakdown.assessment_type === 'JOB_MATCHED'
+                ? `Job matched: ${breakdown.job_title || 'selected role'}`
+                : hasCurrentScore ? 'General resume-quality assessment' : 'Reanalyze to calculate a score with the current rubric.'}</p>
+
+              {hasCurrentScore && <div>
+                {Object.entries(components).map(([key, item]) => (
+                  <p key={key}>{key.replaceAll('_', ' ')}: {item.score} / {item.maximum}</p>
+                ))}
+              </div>}
+
+              <p>Skills detected in resume</p>
               <div className="chips">
 
                 {extractedSkills.map(
@@ -1737,6 +1801,11 @@ export function Resume({ notify }) {
 
               </div>
 
+              {matchedSkills.length > 0 && <p>Matched skills: {matchedSkills.join(', ')}</p>}
+              {missingSkills.length > 0 && <p>Missing skills: {missingSkills.join(', ')}</p>}
+              {(breakdown.warnings || []).map((warning) => <p key={warning} role="status">Warning: {warning}</p>)}
+              {recommendations.map((recommendation) => <p key={recommendation}>{recommendation}</p>)}
+
             </div>
 
             <button
@@ -1748,6 +1817,14 @@ export function Resume({ notify }) {
             >
               Analyze with AI →
             </button>
+            {resume.analysis_id != null && <button
+              className="outline"
+              disabled={deletingAnalysisId !== null}
+              aria-label={`Delete ATS analysis for ${resume.file_name}`}
+              onClick={() => deleteAnalysis(resume.analysis_id)}
+            >
+              {String(deletingAnalysisId) === String(resume.analysis_id) ? 'Deleting...' : 'Delete analysis'}
+            </button>}
           </Card>
         );
       })}
@@ -2189,133 +2266,45 @@ export function Prediction({
 
   const [loading, setLoading] =
     useState(false);
-
-  const normalizeResult =
-    (data) => {
-      if (!data) {
-        return null;
-      }
-
-      let factors = [];
-
-      if (
-        Array.isArray(
-          data.important_factors
-        )
-      ) {
-        factors =
-          data.important_factors;
-      } else {
-        try {
-          factors = JSON.parse(
-            data.important_factors ||
-              '[]'
-          );
-        } catch {
-          factors = [];
-        }
-      }
-
-      const probability =
-        data.probability !==
-        undefined
-          ? Number(
-              data.probability
-            )
-          : Number(
-              data.percentage || 0
-            ) / 100;
-
-      const percentage =
-        data.percentage !==
-        undefined
-          ? Number(
-              data.percentage
-            )
-          : Math.round(
-              probability * 100
-            );
-
-      return {
-        percentage,
-
-        label:
-          data.label ||
-          (
-            data.prediction_label
-              ? `${data.prediction_label[0]}${data.prediction_label
-                  .slice(1)
-                  .toLowerCase()} Probability`
-              : 'Placement Probability'
-          ),
-
-        important_factors:
-          factors,
-
-        disclaimer:
-          data.disclaimer ||
-          'This is an estimated readiness signal based on your available profile data.',
-      };
-    };
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const response =
-          await api.get(
-            '/prediction/latest'
-          );
-
-        const data =
-          response.data.data;
-
-        if (data) {
-          setResult(
-            normalizeResult(data)
-          );
-        }
-      } catch (error) {
-        console.error(
-          'Prediction loading error:',
-          error
-        );
-      }
-    };
-
-    load();
-  }, []);
+  const [error, setError] = useState('');
 
   const runPrediction =
     async () => {
       try {
         setLoading(true);
+        setError('');
+        setResult(null);
 
         const response =
           await api.post(
             '/prediction',
             {}
           );
-
-        const data =
-          response.data.data;
-
-        setResult(
-          normalizeResult(data)
-        );
-
-        notify(
-          'Placement estimate updated'
-        );
+        const readiness = response.data.data;
+        const allowedStatuses = ['NEEDS_IMPROVEMENT', 'DEVELOPING', 'CAREER_READY', 'UNAVAILABLE'];
+        if (readiness?.method !== 'RULE_BASED_READINESS' || !allowedStatuses.includes(readiness.status)) {
+          setResult({
+            status: 'UNAVAILABLE',
+            label: 'Readiness Unavailable',
+            explanation: 'A valid rule-based readiness result was not returned.',
+            factors: [],
+            missing_information: [],
+            recommendations: [],
+          });
+          return;
+        }
+        setResult(readiness);
       } catch (error) {
-        console.error(
-          'Prediction error:',
-          error
-        );
-
-        notify(
-          error.response?.data?.message ||
-            'Complete your profile and resume first'
-        );
+        const message = error.response?.data?.message || 'The prediction service is unavailable. Please try again.';
+        setError(message);
+        setResult({
+          status: 'UNAVAILABLE',
+          label: 'Readiness Unavailable',
+          explanation: message,
+          factors: [],
+          missing_information: [],
+          recommendations: [],
+        });
       } finally {
         setLoading(false);
       }
@@ -2328,33 +2317,28 @@ export function Prediction({
         PLACEMENT SIGNAL
       </p>
 
-      <h2>
-        Explained readiness estimate.
-      </h2>
+      <h2>Career readiness</h2>
 
       <Card className="prediction">
 
-        <div className="score">
-
-          {result?.percentage ??
-            '—'}
-
-          <small>
-            %
-          </small>
-
+        <div
+          className="score"
+          role="status"
+          aria-live="polite"
+          style={{
+            fontSize: (result?.label || 'Readiness Unavailable').length > 16 ? '32px' : '44px',
+            lineHeight: 1.15,
+            maxWidth: '100%',
+            overflowWrap: 'anywhere',
+          }}
+        >
+          {result?.readiness_score == null ? 'Unavailable' : `${result.readiness_score}%`}
         </div>
 
         <div>
-
-          <h3>
-            {result?.label ||
-              'Generate your estimate'}
-          </h3>
-
+          <h3>{result?.label || 'Calculate your career readiness'}</h3>
           <p>
-            {result?.disclaimer ||
-              'Uses your CGPA, skills, projects, certifications, internship, assessments and resume ATS score.'}
+            {result?.explanation || 'Calculate your career readiness status from saved profile, experience, and resume evidence.'}
           </p>
 
           <button
@@ -2366,52 +2350,24 @@ export function Prediction({
           >
             {loading
               ? 'Calculating...'
-              : 'Calculate estimate →'}
+              : 'Calculate Readiness'}
           </button>
 
         </div>
       </Card>
 
-      {result && (
-        <Card>
-
-          <p className="mono">
-            IMPORTANT FACTORS
-          </p>
-
-          {result
-            .important_factors
-            .length > 0 ? (
-
-            <ul>
-
-              {result
-                .important_factors
-                .map(
-                  (
-                    factor,
-                    index
-                  ) => (
-                    <li
-                      key={index}
-                    >
-                      {factor}
-                    </li>
-                  )
-                )}
-
-            </ul>
-
-          ) : (
-
-            <p>
-              No factors available yet.
-            </p>
-
-          )}
-
-        </Card>
-      )}
+      {error && !result && <p role="alert" className="error">{error}</p>}
+      {result && <>
+        {result.factors?.length > 0 && <Card>
+          <p className="mono">READINESS FACTORS</p>
+          {result.factors.map((factor) => <p key={factor.key}><strong>{factor.label}</strong>: {factor.points} / {factor.maximum} points · {factor.evidence}</p>)}
+        </Card>}
+        {(result.missing_information?.length > 0 || result.recommendations?.length > 0) && <Card>
+          <p className="mono">{result.status === 'UNAVAILABLE' ? 'MISSING PROFILE INFORMATION' : 'NEXT STEPS'}</p>
+          {result.missing_information?.length > 0 && <ul>{result.missing_information.map((item) => <li key={item}>{item}</li>)}</ul>}
+          {result.recommendations?.length > 0 && <ul>{result.recommendations.map((item) => <li key={item}>{item}</li>)}</ul>}
+        </Card>}
+      </>}
     </div>
   );
 }
@@ -2426,47 +2382,147 @@ export function Interview({
 }) {
   const [plan, setPlan] =
     useState(null);
-
   const [role, setRole] =
     useState(
       'Software Engineer'
     );
-
+  const [jobs, setJobs] = useState([]);
+  const [jobId, setJobId] = useState('');
   const [loading, setLoading] =
     useState(false);
-
-  const loadRecommendations =
-    async () => {
-      try {
-        setLoading(true);
-
-        const response =
-          await api.post(
-            '/interview/recommendations',
-            {
-              role,
-            }
-          );
-
-        setPlan(
-          response.data.data
-        );
-      } catch (error) {
-        notify(
-          error.response?.data?.message ||
-            'Could not load interview recommendations'
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
-
-  useEffect(() => {
-    loadRecommendations();
-  }, []);
-
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [active, setActive] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [result, setResult] = useState(null);
   const questions =
     plan?.questions || [];
+
+  useEffect(() => {
+    api.get('/jobs')
+      .then((response) => setJobs(response.data.data || []))
+      .catch(() => setError('Job listings are unavailable; you can still enter a target role manually.'));
+  }, []);
+
+  const loadRecommendations = async () => {
+    if (role.trim().length < 2) {
+      setError('Enter a target role before generating questions.');
+      return;
+    }
+    try {
+      setLoading(true);
+      setError('');
+      setPlan(null);
+      setResult(null);
+      const response = await api.post('/interview/recommendations', {
+        role: role.trim(),
+        ...(jobId ? { job_id: Number(jobId) } : {}),
+      });
+      setPlan(response.data.data);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Interview recommendations are unavailable. Check the local AI service and try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startPractice = () => {
+    if (!questions.length) return;
+    setAnswers({});
+    setCurrentQuestion(0);
+    setResult(null);
+    setActive(true);
+  };
+
+  const submitPractice = async () => {
+    const incomplete = questions.filter((question) => (answers[question.question_id] || '').trim().length < 20);
+    if (incomplete.length) {
+      setError(`Answer every question with at least 20 characters. ${incomplete.length} answer(s) need more detail.`);
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setError('');
+      const response = await api.post('/interview/practice', {
+        role: plan.role,
+        answers: questions.map((question) => ({
+          question_id: question.question_id,
+          answer: answers[question.question_id],
+        })),
+      });
+      setResult(response.data.data);
+      setActive(false);
+      notify('Practice results saved');
+    } catch (submitError) {
+      setError(submitError.response?.data?.message || 'Could not save this practice session. Your answers have not been reported as saved.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (result) {
+    return (
+      <div className="page">
+        <p className="mono">PRACTICE SUMMARY</p>
+        <h2>{result.role}</h2>
+        <Card>
+          <h3>{result.average_rubric_coverage}% rubric coverage</h3>
+          <p>{result.questions_answered} responses saved to your practice history.</p>
+          <p>{result.feedback_type}</p>
+        </Card>
+        {result.results.map((item, index) => {
+          const question = questions.find((candidate) => candidate.question_id === item.question_id);
+          return (
+            <Card key={item.question_id}>
+              <p className="mono">QUESTION {index + 1} · {item.score}% COVERAGE</p>
+              <h3>{question?.question}</h3>
+              <p>{item.feedback}</p>
+              {item.matched_concepts.length > 0 && <p>Covered: {item.matched_concepts.join(', ')}</p>}
+              {item.missing_concepts.length > 0 && <p>Consider adding: {item.missing_concepts.join(', ')}</p>}
+            </Card>
+          );
+        })}
+        <button className="outline" onClick={() => setResult(null)}>Back to interview plan</button>
+      </div>
+    );
+  }
+
+  if (active && questions[currentQuestion]) {
+    const question = questions[currentQuestion];
+    const answer = answers[question.question_id] || '';
+    return (
+      <div className="page">
+        <p className="mono">TEXT PRACTICE · {currentQuestion + 1} OF {questions.length}</p>
+        <h2>{plan.role}</h2>
+        <Card>
+          <p>{question.category} · {question.difficulty}</p>
+          <h3>{question.question}</h3>
+          <p>Rubric concepts: {(question.key_concepts || []).join(', ')}</p>
+          <label>
+            Your answer
+            <textarea
+              rows={8}
+              maxLength={5000}
+              value={answer}
+              onChange={(event) => setAnswers({ ...answers, [question.question_id]: event.target.value })}
+            />
+          </label>
+          <small>{answer.trim().length} / 5000 characters · at least 20 required</small>
+          {error && <p role="alert" className="error">{error}</p>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginTop: '20px' }}>
+            <button className="outline" disabled={currentQuestion === 0 || submitting} onClick={() => setCurrentQuestion((value) => value - 1)}>Previous</button>
+            {currentQuestion < questions.length - 1 ? (
+              <button className="primary" disabled={answer.trim().length < 20 || submitting} onClick={() => { setError(''); setCurrentQuestion((value) => value + 1); }}>Next question</button>
+            ) : (
+              <button className="primary" disabled={submitting} onClick={submitPractice}>{submitting ? 'Saving...' : 'Submit practice'}</button>
+            )}
+          </div>
+        </Card>
+        <button className="outline" disabled={submitting} onClick={() => { setActive(false); setError(''); }}>Exit without saving</button>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
@@ -2481,19 +2537,30 @@ export function Interview({
 
       <label>
         Target role
-
         <input
           value={role}
           onChange={(e) =>
-            setRole(
-              e.target.value
-            )
-          }
-          onBlur={
-            loadRecommendations
+            { setRole(e.target.value); setJobId(''); }
           }
         />
       </label>
+
+      <label>
+        Or choose an open job
+        <select value={jobId} onChange={(event) => {
+          const selected = jobs.find((job) => String(job.id) === event.target.value);
+          setJobId(event.target.value);
+          if (selected) setRole(selected.title);
+        }}>
+          <option value="">No job selected</option>
+          {jobs.map((job) => <option key={job.id} value={job.id}>{job.title} · {job.company_name}</option>)}
+        </select>
+      </label>
+
+      <button className="primary" disabled={loading} onClick={loadRecommendations}>
+        {loading ? 'Building plan...' : 'Generate practice plan'}
+      </button>
+      {error && <p role="alert" className="error">{error}</p>}
 
       <div className="split">
 
@@ -2510,9 +2577,7 @@ export function Interview({
           </h3>
 
           <p>
-            Focus areas are generated
-            from your stored skills
-            and selected role.
+            Prompts use your saved skills, project context, resume analysis and selected role. Feedback is rubric-based; no external AI provider evaluates answers.
           </p>
 
           <div className="chips">
@@ -2532,12 +2597,8 @@ export function Interview({
 
           <button
             className="primary"
-            disabled={loading}
-            onClick={() =>
-              notify(
-                'Practice session started'
-              )
-            }
+            disabled={loading || !questions.length}
+            onClick={startPractice}
           >
             Start practice →
           </button>
@@ -2593,13 +2654,18 @@ export function Interview({
             <p>
               {loading
                 ? 'Generating questions...'
-                : 'Generate personalized questions after adding skills to your profile.'}
+                : 'Generate a plan to see questions grounded in your available profile data.'}
             </p>
           )}
 
         </Card>
 
       </div>
+      {plan?.profile_gaps?.length > 0 && <Card>
+        <p className="mono">PROFILE CONTEXT NOT AVAILABLE</p>
+        <ul>{plan.profile_gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
+      </Card>}
+      {plan?.source && <small>{plan.source}</small>}
     </div>
   );
 }
@@ -3895,6 +3961,191 @@ export function CompanyProfile({
 
       </Card>
 
+    </div>
+  );
+}
+
+
+const emptyJobDraft = {
+  title: '',
+  description: '',
+  required_skills: '',
+  minimum_cgpa: '0',
+  eligible_branches: '',
+  graduation_year: '',
+  salary: '',
+  location: '',
+  job_type: 'FULL_TIME',
+  deadline: '',
+  company_id: '',
+};
+
+export function JobManagement({ notify = () => {} }) {
+  let user = {};
+  try {
+    user = JSON.parse(localStorage.getItem('auth') || '{}').user || {};
+  } catch {
+    user = {};
+  }
+
+  const isAdmin = user.role === 'ADMIN';
+  const [jobs, setJobs] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [form, setForm] = useState(emptyJobDraft);
+  const [editingId, setEditingId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const [jobsResponse, companiesResponse] = await Promise.all([
+        api.get('/jobs/mine'),
+        isAdmin ? api.get('/companies') : Promise.resolve(null),
+      ]);
+      setJobs(jobsResponse.data.data || []);
+      setCompanies(companiesResponse?.data.data || []);
+      setError('');
+    } catch (loadError) {
+      setError(loadError.response?.data?.message || 'Could not load jobs');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const resetForm = () => {
+    setForm(emptyJobDraft);
+    setEditingId(null);
+  };
+
+  const editJob = (job) => {
+    setForm({
+      title: job.title || '',
+      description: job.description || '',
+      required_skills: (job.required_skills || []).join(', '),
+      minimum_cgpa: String(job.minimum_cgpa ?? 0),
+      eligible_branches: (job.eligible_branches || []).join(', '),
+      graduation_year: job.graduation_year ? String(job.graduation_year) : '',
+      salary: job.salary || '',
+      location: job.location || '',
+      job_type: job.job_type || 'FULL_TIME',
+      deadline: job.deadline ? String(job.deadline).slice(0, 10) : '',
+      company_id: String(job.company_id || ''),
+    });
+    setEditingId(job.id);
+  };
+
+  const saveJob = async (event) => {
+    event.preventDefault();
+    const list = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+    const payload = {
+      title: form.title.trim(),
+      description: form.description.trim(),
+      required_skills: list(form.required_skills),
+      minimum_cgpa: Number(form.minimum_cgpa),
+      eligible_branches: list(form.eligible_branches),
+      graduation_year: form.graduation_year ? Number(form.graduation_year) : undefined,
+      salary: form.salary.trim() || undefined,
+      location: form.location.trim() || undefined,
+      job_type: form.job_type,
+      deadline: form.deadline || undefined,
+      ...(isAdmin ? { company_id: Number(form.company_id) } : {}),
+    };
+
+    try {
+      setSaving(true);
+      if (editingId) {
+        await api.put(`/jobs/${editingId}`, payload);
+      } else {
+        await api.post('/jobs', payload);
+      }
+      notify(editingId ? 'Job updated' : 'Job created');
+      resetForm();
+      await load();
+    } catch (saveError) {
+      notify(saveError.response?.data?.message || 'Could not save job');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteJob = async (job) => {
+    if (!window.confirm(`Delete ${job.title}?`)) return;
+    try {
+      await api.delete(`/jobs/${job.id}`);
+      setJobs((current) => current.filter((item) => item.id !== job.id));
+      notify('Job deleted');
+    } catch (deleteError) {
+      notify(deleteError.response?.data?.message || 'Could not delete job');
+    }
+  };
+
+  return (
+    <div className="page">
+      <p className="mono">{isAdmin ? 'JOB MANAGEMENT' : 'POSTED JOBS'}</p>
+      <h2>{isAdmin ? 'Manage placement opportunities.' : 'Manage your open roles.'}</h2>
+
+      <Card>
+        <h3>{editingId ? 'Edit job' : 'Create a job'}</h3>
+        <form onSubmit={saveJob}>
+          {isAdmin && (
+            <label>
+              Company
+              <select required value={form.company_id} onChange={(event) => setForm({ ...form, company_id: event.target.value })}>
+                <option value="">Choose a company</option>
+                {companies.map((company) => <option key={company.id} value={company.id}>{company.company_name}</option>)}
+              </select>
+            </label>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+            <label>Title<input required minLength={2} maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+            <label>Job type<select value={form.job_type} onChange={(event) => setForm({ ...form, job_type: event.target.value })}><option value="FULL_TIME">Full time</option><option value="INTERNSHIP">Internship</option><option value="PART_TIME">Part time</option><option value="CONTRACT">Contract</option></select></label>
+            <label>Required skills<input required placeholder="Python, SQL, React" value={form.required_skills} onChange={(event) => setForm({ ...form, required_skills: event.target.value })} /></label>
+            <label>Eligible branches<input placeholder="Computer Science, Electronics" value={form.eligible_branches} onChange={(event) => setForm({ ...form, eligible_branches: event.target.value })} /></label>
+            <label>Minimum CGPA<input type="number" min="0" max="10" step="0.01" value={form.minimum_cgpa} onChange={(event) => setForm({ ...form, minimum_cgpa: event.target.value })} /></label>
+            <label>Graduation year<input type="number" min="2020" max="2040" value={form.graduation_year} onChange={(event) => setForm({ ...form, graduation_year: event.target.value })} /></label>
+            <label>Salary<input maxLength={100} value={form.salary} onChange={(event) => setForm({ ...form, salary: event.target.value })} /></label>
+            <label>Location<input maxLength={120} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label>
+            <label>Application deadline<input type="date" value={form.deadline} onChange={(event) => setForm({ ...form, deadline: event.target.value })} /></label>
+          </div>
+          <label>Description<textarea required minLength={10} rows={4} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+            <button className="primary" disabled={saving || (isAdmin && !companies.length)} type="submit">{saving ? 'Saving...' : editingId ? 'Save changes' : 'Create job'}</button>
+            {editingId && <button className="outline" type="button" onClick={resetForm}>Cancel</button>}
+          </div>
+        </form>
+      </Card>
+
+      <section style={{ marginTop: '24px' }}>
+        <h3>Your jobs</h3>
+        {loading && <p>Loading jobs...</p>}
+        {error && <p role="alert">{error}</p>}
+        {!loading && !error && jobs.length === 0 && <p className="empty">No jobs posted yet.</p>}
+        <div style={{ display: 'grid', gap: '12px' }}>
+          {jobs.map((job) => (
+            <Card key={job.id}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+                <div>
+                  {isAdmin && <p>{job.company_name}</p>}
+                  <h3>{job.title}</h3>
+                  <p>{job.location || 'Location not specified'} · {job.job_type?.replace('_', ' ')}</p>
+                  <p>{(job.required_skills || []).join(', ')}</p>
+                  {job.deadline && <small>Deadline: {String(job.deadline).slice(0, 10)}</small>}
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button className="outline" type="button" onClick={() => editJob(job)}>Edit</button>
+                  <button className="outline" type="button" onClick={() => deleteJob(job)}>Delete</button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

@@ -31,42 +31,48 @@ frontend/       React, React Router, Axios, responsive CSS
 backend/        Express REST API, JWT, validation, MySQL pool, uploads
 ai-service/     FastAPI, resume NLP, matcher, skill gap, ML training/prediction
 database/       MySQL schema and fictional seed data
-docker-compose.yml
 ```
 
-## Quick start with Docker
+## Windows local setup
 
-1. Install Docker Desktop.
-2. From this directory, run `docker compose up --build`.
-3. Open `http://localhost:5173`.
+Prerequisites: Node.js 20+, Python 3.10+, and MySQL 8 installed as a Windows service. The default local ports are MySQL `3306`, backend `5000`, AI service `8000`, and frontend `5173`.
 
-Services: frontend `5173`, backend `5000`, AI service `8000`, and MySQL `3306`. The container services communicate via `mysql` and `ai-service`, never `localhost`.
+Check MySQL in PowerShell with `Get-Service MySQL80`. If the database is new, use MySQL Workbench to execute `database/schema.sql`, followed by `database/seed.sql` once. The seed contains fictional records; do not rerun it against an initialized database. Existing databases should not be reinitialized over user data.
 
-## Local development
+Keep existing `.env` files. Only create one from its template when it does not already exist, then edit the local credentials and secrets without committing the result.
 
-Create local environment files from each `.env.example`. Do not commit the resulting `.env` files.
+In a PowerShell terminal from the repository root:
 
-```bash
-# terminal 1
-cd ai-service
+```powershell
+Set-Location ai-service
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python train_model.py
-uvicorn app.main:app --reload --port 8000
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe train_model.py
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
 
-# terminal 2 — create database first with database/schema.sql and database/seed.sql
-cd backend
-npm install
-npm run dev
+In a second terminal:
 
-# terminal 3
-cd frontend
-npm install
+```powershell
+Set-Location backend
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+npm ci
 npm run dev
 ```
 
-Run the SQL files in order: `database/schema.sql`, then `database/seed.sql`. The seed records are fictional. The existing bcrypt hash is intentionally not treated as a documented account password; register a new account for local use, or replace it with a hash generated for your own local demo password.
+Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and a unique `JWT_SECRET` in `backend/.env`. The default AI and frontend URLs in the template target the local services.
+
+In a third terminal:
+
+```powershell
+Set-Location frontend
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+npm ci
+npm run dev
+```
+
+Open `http://localhost:5173`. Verify the backend at `http://localhost:5000/health` and the AI service at `http://localhost:8000/health`. The database schema and seed scripts are initialization-only; they do not reset or migrate an existing database. No demo password is provided for the fictional seed accounts; register a local account or set a password hash through an approved local database procedure.
 
 ## AI service
 
@@ -87,7 +93,7 @@ Run the SQL files in order: `database/schema.sql`, then `database/seed.sql`. The
 | --- | --- |
 | Authentication | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` |
 | Student | `GET/PUT /api/students/profile`, `GET/POST /api/students/skills` |
-| Jobs | `GET /api/jobs`, `POST/PUT/DELETE /api/jobs/:id` |
+| Jobs | `GET /api/jobs`, `GET /api/jobs/mine`, `POST/PUT/DELETE /api/jobs/:id` |
 | Applications | `POST/GET /api/applications`, `PUT /api/applications/:id/status` |
 | Resumes | `POST /api/resumes/upload`, `POST /api/resumes/:id/analyze` |
 | AI | `POST /api/prediction`, `POST /api/job-match`, `POST /api/skill-gap` |
@@ -100,14 +106,17 @@ All API responses use `{ "success": true, "data": ... }`; errors use `{ "success
 - Passwords are hashed with bcrypt.
 - JWTs are verified by `requireAuth`; privileged routes also require a role.
 - Zod performs request validation and mysql2 parameterized queries prevent SQL injection.
-- Resume uploads permit PDF MIME types only and have a 5 MB limit.
+- Resume uploads check PDF MIME type and file signature, with a 5 MB limit.
 - Configure a long, unique `JWT_SECRET`, restrictive frontend origin, database credentials, backups, rate limits, logging, and TLS before deployment.
 
 ## Verification performed
 
-- Node syntax checks passed for the API entry point and core routes.
-- Python compilation passed for FastAPI, NLP, matching, and prediction modules.
-- Full dependency builds were not runnable in this workspace because npm/PyPI dependencies are unavailable and Docker Desktop is not installed. Run the commands above on a connected machine or via Docker to complete integration verification.
+- `npm test --prefix backend`: 7 tests passed for transaction handling, safe error mapping, and PDF signatures.
+- `npm run build --prefix frontend`: production bundle completed successfully.
+- `node --check` passed for all backend JavaScript source; Python `compileall` passed for the AI service and training module.
+- Local backend `/health` returned healthy with MySQL; `/api/jobs` returned three seeded jobs; invalid registration returned structured HTTP 400; `/api/jobs/mine` rejected unauthenticated access with 401.
+- Local FastAPI `/health`, job matching, skill-gap analysis, and prediction responded. A MIME-spoofed corrupt PDF was rejected with HTTP 422.
+- Authenticated student/company/admin end-to-end workflows have not yet been verified. The seed account password is intentionally undocumented; use a fictional local account for manual testing.
 
 ## Screenshots
 

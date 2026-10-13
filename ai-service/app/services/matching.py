@@ -151,14 +151,12 @@ def skill_gap(current_skills, required_skills, role):
     }
 
 
-def interview_recommendations(role, skills, missing):
-    current = norm(skills)
+def interview_recommendations(role, skills, missing, projects=None, resume_skills=None):
+    current = norm(skills) | norm(resume_skills or [])
 
-    baseline = [
-        "Data Structures",
-        "Projects",
-        "Communication"
-    ]
+    baseline = ["Data Structures", "Communication"]
+    if not projects:
+        baseline.append("Projects")
 
     role_focus = (
         ["SQL"]
@@ -180,23 +178,34 @@ def interview_recommendations(role, skills, missing):
         )
     )[:5]
 
+    questions = [
+        {
+            "category": "Project walkthrough",
+            "difficulty": "MEDIUM",
+            "question": (
+                f"Walk me through the project '{project}': what problem did it solve, "
+                "what did you build, and what outcome did you observe?"
+            ),
+            "key_concepts": ["problem", "contribution", "technical decisions", "outcome"],
+        }
+        for project in (projects or [])[:2]
+    ]
+    questions.extend(
+        {
+            "category": item,
+            "difficulty": "MEDIUM",
+            "question": (
+                f"For the {role} role, describe a specific example involving {item}. "
+                "Explain your approach, trade-offs, and result."
+            ),
+            "key_concepts": [item, "trade-offs", "impact"],
+        }
+        for item in focus
+    )
+
     return {
         "role": role,
         "focus_areas": focus,
-        "questions": [
-            {
-                "category": item,
-                "difficulty": "MEDIUM",
-                "question": (
-                    f"Explain how you used {item} "
-                    f"in a project related to {role}."
-                ),
-                "key_concepts": [
-                    item,
-                    "trade-offs",
-                    "impact"
-                ]
-            }
-            for item in focus
-        ]
+        "questions": questions,
+        "source": "local profile-based prompt templates; no external AI provider is used",
     }

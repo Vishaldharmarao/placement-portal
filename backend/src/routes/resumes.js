@@ -12,6 +12,8 @@ import {
   asyncRoute,
   ok
 } from '../utils/http.js';
+import { hasPdfSignature } from '../utils/files.js';
+import { deleteOwnedResumeAnalysis } from '../utils/resume-analysis.js';
 
 import {
   requireAuth,
@@ -61,7 +63,7 @@ const profile = async (userId) => {
 
   const rows = await query(
     `
-    SELECT id
+    SELECT id, cgpa, branch, graduation_year
     FROM student_profiles
     WHERE user_id = :id
     `,
@@ -79,6 +81,17 @@ const profile = async (userId) => {
 
   return rows[0];
 };
+
+function parseJsonList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 
 // =========================================================
@@ -208,6 +221,15 @@ router.post(
 
     }
 
+    const contents = fs.readFileSync(req.file.path);
+    if (!hasPdfSignature(contents)) {
+      fs.unlinkSync(req.file.path);
+      throw new AppError(
+        'The uploaded file is not a valid PDF',
+        400
+      );
+    }
+
 
     const student =
       await profile(req.user.id);
@@ -280,10 +302,12 @@ router.get(
           r.id,
           r.file_name,
           r.uploaded_at,
+          ra.id AS analysis_id,
           ra.ats_score,
           ra.extracted_skills,
           ra.missing_skills,
-          ra.recommendations
+          ra.recommendations,
+          ra.score_breakdown
         FROM resumes r
         LEFT JOIN resume_analysis ra
           ON ra.resume_id = r.id
@@ -298,6 +322,26 @@ router.get(
 
     ok(res, rows);
 
+  })
+);
+
+
+router.delete(
+  '/analysis/:analysisId',
+  requireAuth,
+  requireRole('STUDENT'),
+  asyncRoute(async (req, res) => {
+    const student = await profile(req.user.id);
+    const deleted = await deleteOwnedResumeAnalysis({
+      analysisId: req.params.analysisId,
+      studentId: student.id,
+      executeDelete: query,
+    });
+
+    ok(res, {
+      message: 'ATS analysis deleted',
+      analysis_id: deleted.analysisId,
+    });
   })
 );
 
@@ -392,14 +436,56 @@ router.post(
     );
 
 
-    const { data } =
-      await axios.post(
+    let job = null;
+    if (req.body?.job_id) {
+      const jobId = Number(req.body.job_id);
+      if (!Number.isInteger(jobId) || jobId < 1) {
+        throw new AppError('Invalid job selected', 400);
+      }
+      const jobRows = await query(
+        `SELECT title, description, required_skills, minimum_cgpa,
+                eligible_branches, graduation_year
+         FROM jobs WHERE id = :id`,
+        { id: jobId }
+      );
+      if (!jobRows[0]) throw new AppError('Selected job not found', 404);
+      job = jobRows[0];
+    }
+
+    const requiredSkills = parseJsonList(job?.required_skills);
+    const eligibleBranches = parseJsonList(job?.eligible_branches);
+    const qualification = {
+      minimum_cgpa: job?.minimum_cgpa == null ? null : Number(job.minimum_cgpa),
+      eligible_branches: eligibleBranches,
+      graduation_year: job?.graduation_year || null,
+      student_cgpa: student.cgpa == null ? null : Number(student.cgpa),
+      student_branch: student.branch || null,
+      student_graduation_year: student.graduation_year || null,
+    };
+    form.append('job_description', job?.description || '');
+    form.append('required_skills_json', JSON.stringify(requiredSkills));
+    form.append('job_title', job?.title || '');
+    form.append('qualification_json', JSON.stringify(qualification));
+
+    let data;
+    try {
+      ({ data } = await axios.post(
         `${env.aiUrl}/analyze-resume`,
         form,
-        {
-          timeout: 30000
-        }
+        { timeout: 30000 }
+      ));
+    } catch (error) {
+      const status = error.response?.status;
+      const message = error.response?.data?.detail;
+      throw new AppError(
+        status ? (message || 'Resume analysis failed') : 'Resume analysis service is unavailable',
+        status && status >= 400 && status < 500 ? status : 503
       );
+    }
+
+    if (!Number.isInteger(data?.ats_score) || data.ats_score < 0 || data.ats_score > 100 || !data.score_breakdown) {
+      throw new AppError('Resume analysis returned an invalid score; no result was saved', 502);
+    }
 
 
     // -----------------------------------------------------
@@ -517,7 +603,7 @@ router.post(
           ),
 
         ats_score:
-          data.ats_score || 0,
+          data.ats_score,
 
         breakdown:
           JSON.stringify(

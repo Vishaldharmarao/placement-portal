@@ -3,6 +3,7 @@ import cors from 'cors';
 
 import { pool } from './config/db.js';
 import { env, missingEnvironment } from './config/env.js';
+import { errorHandler } from './middleware/error.js';
 
 import auth from './routes/auth.js';
 import studentExperience from './routes/student-experience.js';
@@ -32,13 +33,26 @@ if (missingEnvironment.length) {
 
 const app = express();
 
+const allowedOrigins = new Set([
+  env.frontendUrl,
+  ...(!env.production
+    ? ['http://localhost:5173', 'http://127.0.0.1:5173']
+    : []),
+]);
+
 /* =========================================================
    MIDDLEWARE
 ========================================================= */
 
 app.use(
   cors({
-    origin: env.frontendUrl,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Origin not allowed by CORS'));
+    },
     credentials: true,
   })
 );
@@ -155,59 +169,7 @@ app.use((req, res) => {
    ERROR HANDLER
 ========================================================= */
 
-app.use((error, req, res, next) => {
-  let statusCode = 500;
-  let message = 'Internal server error';
-  let stack = '';
-
-  try {
-    if (
-      error &&
-      typeof error.statusCode === 'number'
-    ) {
-      statusCode = error.statusCode;
-    } else if (
-      error &&
-      typeof error.status === 'number'
-    ) {
-      statusCode = error.status;
-    }
-
-    if (
-      error &&
-      typeof error.message === 'string'
-    ) {
-      message = error.message;
-    }
-
-    if (
-      error &&
-      typeof error.stack === 'string'
-    ) {
-      stack = error.stack;
-    }
-  } catch {
-    statusCode = 500;
-    message = 'Unknown backend error';
-    stack = '';
-  }
-
-  console.error('====================================');
-  console.error('BACKEND ERROR');
-  console.error('STATUS:', statusCode);
-  console.error('MESSAGE:', message);
-
-  if (stack) {
-    console.error('STACK:', stack);
-  }
-
-  console.error('====================================');
-
-  return res.status(statusCode).json({
-    success: false,
-    message,
-  });
-});
+app.use(errorHandler);
 
 /* =========================================================
    START SERVER

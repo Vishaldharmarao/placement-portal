@@ -250,6 +250,32 @@ router.get(
 );
 
 
+router.get(
+  '/mine',
+  requireAuth,
+  requireRole('COMPANY', 'ADMIN'),
+  asyncRoute(async (req, res) => {
+    const company = req.user.role === 'COMPANY'
+      ? await companyFor(req.user.id)
+      : null;
+    const rows = await query(
+      `SELECT j.*, c.company_name
+       FROM jobs j
+       JOIN companies c ON c.id = j.company_id
+       ${company ? 'WHERE j.company_id = :company_id' : ''}
+       ORDER BY j.created_at DESC`,
+      company ? { company_id: company.id } : {}
+    );
+
+    ok(res, rows.map((job) => ({
+      ...job,
+      required_skills: parseList(job.required_skills),
+      eligible_branches: parseList(job.eligible_branches),
+    })));
+  })
+);
+
+
 // =========================================================
 // GET SINGLE JOB
 // =========================================================

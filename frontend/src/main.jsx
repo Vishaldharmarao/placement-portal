@@ -12,12 +12,15 @@ import {
 import {
   BrowserRouter,
   NavLink,
+  Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate
 } from 'react-router-dom';
 
 import axios from 'axios';
+import { getCareerReadinessDisplay } from './career-readiness-view.js';
 
 import './styles.css';
 import {
@@ -32,7 +35,8 @@ import {
   Assessments,
   AdminStudents,
   Analytics,
-  CompanyProfile
+  CompanyProfile,
+  JobManagement
 } from './pages.jsx';
 
 
@@ -285,7 +289,7 @@ function AuthPage({ register = false }) {
           <input
             required
             type="password"
-            minLength={7}
+            minLength={8}
             value={form.password}
             onChange={(e) =>
               setForm({
@@ -367,10 +371,6 @@ function AuthPage({ register = false }) {
         </p>
 
 
-        <small>
-          Demo: admin@demo.edu / Admin@123
-        </small>
-
       </form>
 
     </div>
@@ -389,6 +389,7 @@ function Layout() {
     logout
   } = useAuth();
 
+  const location = useLocation();
   const [toast, setToast] =
     useState('');
 
@@ -406,6 +407,21 @@ function Layout() {
 
   const role =
     user.role.toLowerCase();
+
+  const hasRoleRoute =
+    nav[user.role]?.some(
+      ([path]) =>
+        location.pathname === `/${role}/${path}`
+    );
+
+  if (!hasRoleRoute) {
+    return (
+      <Navigate
+        to={`/${role}/dashboard`}
+        replace
+      />
+    );
+  }
 
 
   return (
@@ -621,7 +637,7 @@ function Layout() {
           <Route
             path="/admin/jobs"
             element={
-              <Jobs
+              <JobManagement
                 notify={notify}
               />
             }
@@ -667,7 +683,7 @@ function Layout() {
           <Route
             path="/company/jobs"
             element={
-              <Jobs
+              <JobManagement
                 notify={notify}
               />
             }
@@ -726,6 +742,7 @@ function Dashboard() {
 
   const [data, setData] =
     useState(null);
+  const [dashboardError, setDashboardError] = useState('');
 
 
   useEffect(() => {
@@ -739,8 +756,9 @@ function Dashboard() {
       .then((response) => {
 
         setData(
-          response.data.data || {}
+          response.data.data || null
         );
+        setDashboardError('');
 
       })
       .catch((error) => {
@@ -750,7 +768,8 @@ function Dashboard() {
           error
         );
 
-        setData({});
+        setData(null);
+        setDashboardError(error.response?.data?.message || 'Dashboard information is unavailable.');
 
       });
 
@@ -759,6 +778,10 @@ function Dashboard() {
 
   const d =
     data || {};
+  const careerReadiness = getCareerReadinessDisplay(
+    d.career_readiness,
+    dashboardError
+  );
 
 
   if (user.role !== 'STUDENT') {
@@ -805,11 +828,11 @@ function Dashboard() {
         <div className="hero-art">
 
           <span>
-            {d.readiness ?? '—'}%
+            {careerReadiness.scoreText}
           </span>
 
           <small>
-            placement ready
+            {careerReadiness.statusLabel}
           </small>
 
           <div className="ring"></div>
@@ -822,13 +845,9 @@ function Dashboard() {
       <section className="kpis">
 
         <Kpi
-          value={
-            d.readiness == null
-              ? '—'
-              : `${d.readiness}%`
-          }
-          label="Placement readiness"
-          delta="Calculated from your profile"
+          value={careerReadiness.scoreText}
+          label="Career readiness"
+          delta={careerReadiness.statusLabel}
         />
 
 
@@ -870,64 +889,26 @@ function Dashboard() {
         <Card>
 
           <p className="mono">
-            READINESS BREAKDOWN
+            CAREER READINESS FACTORS
           </p>
 
           <h3>
-            Profile signals
+            {careerReadiness.statusLabel}
           </h3>
-
-
-          <div className="bars">
-
-            {[
-              [
-                'Profile completion',
-                d.profile_completion ?? 0
-              ],
-
-              [
-                'Resume ATS',
-                d.ats_score ?? 0
-              ],
-
-              [
-                'Assessment score',
-                d.assessment_score ?? 0
-              ],
-
-              [
-                'Placement estimate',
-                d.placement_probability ?? 0
-              ]
-
-            ].map(
-              ([label, value]) => (
-
-                <div key={label}>
-
-                  <span>
-
-                    {label}
-
-                    <b>
-                      {Math.round(
-                        Number(value) || 0
-                      )}%
-                    </b>
-
-                  </span>
-
-                  <Meter
-                    value={value}
-                  />
-
-                </div>
-
-              )
-            )}
-
-          </div>
+          <p>{careerReadiness.explanation}</p>
+          {careerReadiness.factors.map((factor) => (
+            <p key={factor.key}>
+              <strong>{factor.label}</strong>: {factor.points} / {factor.maximum} points · {factor.evidence}
+            </p>
+          ))}
+          {careerReadiness.missingInformation.length > 0 && <>
+            <strong>Missing information</strong>
+            <ul>{careerReadiness.missingInformation.map((item) => <li key={item}>{item}</li>)}</ul>
+          </>}
+          {careerReadiness.recommendations.length > 0 && <>
+            <strong>Next steps</strong>
+            <ul>{careerReadiness.recommendations.map((item) => <li key={item}>{item}</li>)}</ul>
+          </>}
 
         </Card>
 
@@ -1177,26 +1158,22 @@ function CompanyDashboard() {
 
 
   React.useEffect(() => {
-
-    api
-      .get('/applications')
-      .then((response) => {
-
+    Promise.all([
+      api.get('/applications'),
+      api.get('/jobs/mine'),
+    ])
+      .then(([applicationResponse, jobResponse]) => {
+        const applications = applicationResponse.data.data || [];
         setData({
-          total_applications:
-            response.data.data?.length || 0
+          posted_jobs: (jobResponse.data.data || []).length,
+          total_applications: applications.length,
+          shortlisted: applications.filter((item) => item.status === 'SHORTLISTED').length,
+          interviews: applications.filter((item) => item.status === 'INTERVIEW').length,
         });
-
       })
       .catch((error) => {
-
-        console.error(
-          'Company dashboard error:',
-          error
-        );
-
+        console.error('Company dashboard error:', error);
       });
-
   }, []);
 
 
@@ -1224,7 +1201,7 @@ function CompanyDashboard() {
       <section className="kpis">
 
         <Kpi
-          value="—"
+          value={data.posted_jobs ?? 0}
           label="Posted jobs"
           delta="Manage your roles"
         />
@@ -1238,13 +1215,13 @@ function CompanyDashboard() {
         />
 
         <Kpi
-          value="—"
+          value={data.shortlisted ?? 0}
           label="Shortlisted"
           delta="Candidate pipeline"
         />
 
         <Kpi
-          value="—"
+          value={data.interviews ?? 0}
           label="Interviews"
           delta="Interview pipeline"
         />
