@@ -1,11 +1,11 @@
 USE placement_portal;
 INSERT INTO users (name,email,password,role,phone) VALUES
-('Placement Admin','admin@demo.edu','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','ADMIN','9000000000'),
+('Placement Admin','admin@demo.edu','$2a$12$qJxB2uRVu5HtL4M5dBX.LOm16h5EEW4JshC0Ot6d1sqMPEEjRr3..','ADMIN','9000000000'),
 ('Aarav Mehta','aarav@demo.edu','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','STUDENT','9000000001'),
 ('Neha Sharma','neha@demo.edu','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','STUDENT','9000000002'),
-('Kinetix Hiring','hiring@kinetix.demo','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','COMPANY',NULL),
-('Aster Labs','hiring@aster.demo','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','COMPANY',NULL),
-('Northstar','hiring@northstar.demo','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','COMPANY',NULL);
+('Kinetix Hiring','hiring@kinetix.demo','$2a$12$RX3IK2LBPYgFRrjE2pfcquXpgXwyZQr31vQKgaEQfdRun.HGGpmVe','COMPANY',NULL),
+('Aster Labs','hiring@aster.demo','$2a$12$RX3IK2LBPYgFRrjE2pfcquXpgXwyZQr31vQKgaEQfdRun.HGGpmVe','COMPANY',NULL),
+('Northstar','hiring@northstar.demo','$2a$12$RX3IK2LBPYgFRrjE2pfcquXpgXwyZQr31vQKgaEQfdRun.HGGpmVe','COMPANY',NULL);
 INSERT INTO student_profiles(user_id,roll_number,branch,cgpa,graduation_year,location) VALUES (2,'CSE2026001','Computer Science',8.42,2026,'Bengaluru'),(3,'ECE2026002','Electronics',8.05,2026,'Pune');
 INSERT INTO skills(name,category) VALUES ('Python','Programming'),('Java','Programming'),('JavaScript','Programming'),('React','Frontend'),('Node.js','Backend'),('SQL','Database'),('MySQL','Database'),('MongoDB','Database'),('Docker','DevOps'),('Jenkins','DevOps'),('AWS','Cloud'),('Git','Tools'),('Machine Learning','AI'),('Data Structures','CS Fundamentals'),('Algorithms','CS Fundamentals'),('HTML','Frontend'),('CSS','Frontend'),('REST APIs','Backend'),('Tableau','Analytics'),('Communication','Soft Skills'),('C++','Programming'),('DBMS','CS Fundamentals');
 INSERT INTO companies(user_id,company_name,description,website,location) VALUES (4,'Kinetix','Product analytics company','https://kinetix.example','Bengaluru'),(5,'Aster Labs','Applied AI lab','https://aster.example','Pune'),(6,'Northstar Systems','Cloud software firm','https://northstar.example','Remote');
